@@ -8,7 +8,7 @@ namespace IntegrationTests
         [ClassInitialize]
         public static void Setup(TestContext context)
         {
-            Init(new MemoryCacheCounterStore());
+            Init("http://localhost:17346/", new MemoryCacheCounterStore());
         }
 
         [ClassCleanup]

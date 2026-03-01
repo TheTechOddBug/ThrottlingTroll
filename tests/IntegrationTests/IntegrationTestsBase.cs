@@ -9,10 +9,8 @@ namespace IntegrationTests
 //    [TestClass]
     public abstract class IntegrationTestsBase
     {
-        const string LocalHost = "http://localhost:17346/";
         static WebApplication? WebApp;
-
-        static HttpClient Client = new HttpClient { BaseAddress = new Uri(LocalHost) };
+        static HttpClient? Client;
 
         static ThrottlingTrollRule NamedCriticalSectionRule = new ThrottlingTrollRule
         {
@@ -252,10 +250,12 @@ namespace IntegrationTests
 
         static ConcurrentDictionary<string, bool> CircuitBreakerFailingRequestIds = new ConcurrentDictionary<string, bool>();
 
-        public static void Init(ICounterStore counterStore)
+        public static void Init(string localhostUrl, ICounterStore counterStore)
         {
+            Client = new HttpClient { BaseAddress = new Uri(localhostUrl) };
+
             WebApp = WebApplication.Create();
-            WebApp.Urls.Add(LocalHost);
+            WebApp.Urls.Add(localhostUrl);
 
             WebApp.UseThrottlingTroll(options =>
             {

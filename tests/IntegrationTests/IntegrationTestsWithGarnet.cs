@@ -23,7 +23,7 @@ namespace IntegrationTests
 
             GarnetServer.Start();
 
-            Init(new RedisCounterStore(ConnectionMultiplexer.Connect("localhost:6379")));
+            Init("http://localhost:17347/", new RedisCounterStore(ConnectionMultiplexer.Connect("localhost:6379")));
         }
 
         [ClassCleanup]
