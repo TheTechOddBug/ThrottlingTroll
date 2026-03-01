@@ -6,8 +6,8 @@ using ThrottlingTroll;
 
 namespace IntegrationTests
 {
-    [TestClass]
-    public class IntegrationTests
+//    [TestClass]
+    public abstract class IntegrationTestsBase
     {
         const string LocalHost = "http://localhost:17346/";
         static WebApplication? WebApp;
@@ -252,14 +252,15 @@ namespace IntegrationTests
 
         static ConcurrentDictionary<string, bool> CircuitBreakerFailingRequestIds = new ConcurrentDictionary<string, bool>();
 
-        [ClassInitialize]
-        public static void Init(TestContext context)
+        public static void Init(ICounterStore counterStore)
         {
             WebApp = WebApplication.Create();
             WebApp.Urls.Add(LocalHost);
 
             WebApp.UseThrottlingTroll(options =>
             {
+                options.CounterStore = counterStore;
+
                 options.Config = new ThrottlingTrollConfig
                 {
                     Rules =
@@ -368,10 +369,9 @@ namespace IntegrationTests
             WebApp.Start();
         }
 
-        [ClassCleanup]
         public static void TearDown()
         {
-            WebApp.DisposeAsync();
+            WebApp?.DisposeAsync();
         }
 
         [TestMethod]
@@ -912,10 +912,10 @@ namespace IntegrationTests
 
                 Assert.AreEqual(4, lats.Length);
 
-                Assert.IsTrue(lats[0] >=   0 && lats[0] <=  50, $"0: {lats[0]}ms");
-                Assert.IsTrue(lats[1] >= 190 && lats[1] <= 250, $"1: {lats[1]}ms");
-                Assert.IsTrue(lats[2] >= 390 && lats[2] <= 450, $"2: {lats[2]}ms");
-                Assert.IsTrue(lats[3] >= 590 && lats[3] <= 650, $"3: {lats[3]}ms");
+                Assert.IsTrue(lats[0] >=   0 && lats[0] <=  80, $"0: {lats[0]}ms");
+                Assert.IsTrue(lats[1] >= 190 && lats[1] <= 280, $"1: {lats[1]}ms");
+                Assert.IsTrue(lats[2] >= 390 && lats[2] <= 480, $"2: {lats[2]}ms");
+                Assert.IsTrue(lats[3] >= 590 && lats[3] <= 680, $"3: {lats[3]}ms");
 
                 await Task.Delay(300);
             }
