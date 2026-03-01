@@ -42,7 +42,7 @@ namespace ThrottlingTroll
 
             var now = DateTimeOffset.UtcNow;
 
-            int curBucketId = (now.Second / bucketSizeInSeconds) % this.NumOfBuckets;
+            long curBucketId = (now.ToUnixTimeSeconds() / bucketSizeInSeconds) % this.NumOfBuckets;
             string curBucketKey = $"{limitKey}-{curBucketId}";
 
             // Will load contents of all buckets in parallel
