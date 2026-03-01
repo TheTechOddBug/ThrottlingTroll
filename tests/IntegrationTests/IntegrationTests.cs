@@ -90,14 +90,14 @@ namespace IntegrationTests
         {
             public override Task DecrementAsync(string limitKey, long cost, ICounterStore store, IHttpRequestProxy request)
             {
-                // Emulating endpoint that crushes in the middle and forgets to decrement the counter
+                // Emulating endpoint that crashes in the middle and forgets to decrement the counter
                 return Task.CompletedTask;
             }
         }
 
-        static ThrottlingTrollRule SemaphoreCrushingMethodRule = new ThrottlingTrollRule
+        static ThrottlingTrollRule SemaphoreCrashingMethodRule = new ThrottlingTrollRule
         {
-            UriString = "semaphore-crushing-method",
+            UriString = "semaphore-crashing-method",
 
             LimitMethod = new MalfunctioningSemaphoreRateLimitMethod
             {
@@ -232,6 +232,22 @@ namespace IntegrationTests
             }
         };
 
+        static ThrottlingTrollRule LeakyBucketRule = new ThrottlingTrollRule
+        {
+            UriString = "leaky-bucket",
+
+            LimitMethod = new LeakyBucketRateLimitMethod
+            {
+                PermitLimit = 4,
+                IntervalInSeconds = 0.8
+            },
+
+            IdentityIdExtractor = request =>
+            {
+                return ((IIncomingHttpRequestProxy)request).Request.Query["id"];
+            }
+        };
+
         static ConcurrentDictionary<string, string> DedupTestValues = new ConcurrentDictionary<string, string>();
 
         static ConcurrentDictionary<string, bool> CircuitBreakerFailingRequestIds = new ConcurrentDictionary<string, bool>();
@@ -246,20 +262,21 @@ namespace IntegrationTests
             {
                 options.Config = new ThrottlingTrollConfig
                 {
-                    Rules = new[]
-                    {
+                    Rules =
+                    [
                         NamedCriticalSectionRule,
                         SemaphoreRule,
                         DelayedFixedWindowRule,
                         FixedWindowFailingMethodRule,
-                        SemaphoreCrushingMethodRule,
+                        SemaphoreCrashingMethodRule,
                         SlidingWindowRule,
                         ThrowingSemaphoreRule,
                         ThrowingFixedWindowRule,
                         DistributedCounterRule,
                         DeduplicatingSemaphoreRule,
-                        CircuitBreakerRule
-                    }
+                        CircuitBreakerRule,
+                        LeakyBucketRule
+                    ]
                 };
             });
 
@@ -287,7 +304,7 @@ namespace IntegrationTests
                 throw new Exception();
             });
 
-            WebApp.MapGet(SemaphoreCrushingMethodRule.UriString, () =>
+            WebApp.MapGet(SemaphoreCrashingMethodRule.UriString, () =>
             {
                 return Results.StatusCode((int)HttpStatusCode.OK);
             });
@@ -341,6 +358,11 @@ namespace IntegrationTests
                 bool isBadRequest = CircuitBreakerFailingRequestIds.ContainsKey(id);
 
                 return Results.StatusCode(isBadRequest ? (int)HttpStatusCode.BadRequest : (int)HttpStatusCode.OK);
+            });
+
+            WebApp.MapGet(LeakyBucketRule.UriString, () =>
+            {
+                return Results.StatusCode((int)HttpStatusCode.OK);
             });
 
             WebApp.Start();
@@ -413,11 +435,11 @@ namespace IntegrationTests
         }
 
         [TestMethod]
-        public async Task TestSemaphoreCrushingMethods()
+        public async Task TestSemaphoreCrashingMethods()
         {
             await Task.WhenAll(
                 Enumerable.Range(0, 16)
-                    .Select(_ => this.TestSemaphoreCrushingMethod())
+                    .Select(_ => this.TestSemaphoreCrashingMethod())
             );
         }
 
@@ -457,7 +479,6 @@ namespace IntegrationTests
             );
         }
 
-
         [TestMethod]
         public async Task TestCircuitBreakers()
         {
@@ -466,6 +487,16 @@ namespace IntegrationTests
                     .Select(_ => this.TestCircuitBreaker())
             );
         }
+
+        [TestMethod]
+        public async Task TestLeakyBuckets()
+        {
+            await Task.WhenAll(
+                Enumerable.Range(0, 8)
+                    .Select(_ => this.TestLeakyBucket())
+            );
+        }
+
 
         private async Task TestNamedCriticalSection1()
         {
@@ -595,7 +626,7 @@ namespace IntegrationTests
         {
             Guid id = Guid.NewGuid();
 
-            for(int i = 0; i < 3; i++)
+            for (int i = 0; i < 3; i++)
             {
                 var tasks = Enumerable.Range(0, 5).Select(_ => {
 
@@ -616,19 +647,19 @@ namespace IntegrationTests
             }
         }
 
-        private async Task TestSemaphoreCrushingMethod()
+        private async Task TestSemaphoreCrashingMethod()
         {
             Guid id = Guid.NewGuid();
 
             // First call
             var sw1 = new Stopwatch(); sw1.Start();
-            var task1 = Client.GetAsync($"{SemaphoreCrushingMethodRule.UriString}?id={id}").ContinueWith(t => { sw1.Stop(); return t.Result.StatusCode; });
+            var task1 = Client.GetAsync($"{SemaphoreCrashingMethodRule.UriString}?id={id}").ContinueWith(t => { sw1.Stop(); return t.Result.StatusCode; });
 
             await Task.Delay(TimeSpan.FromMilliseconds(100));
 
             // Second call
             var sw2 = new Stopwatch(); sw2.Start();
-            var task2 = Client.GetAsync($"{SemaphoreCrushingMethodRule.UriString}?id={id}").ContinueWith(t => { sw2.Stop(); return t.Result.StatusCode; });
+            var task2 = Client.GetAsync($"{SemaphoreCrashingMethodRule.UriString}?id={id}").ContinueWith(t => { sw2.Stop(); return t.Result.StatusCode; });
 
             await Task.WhenAll(task1, task2);
 
@@ -838,6 +869,55 @@ namespace IntegrationTests
             {
                 response = await Client.GetAsync($"{CircuitBreakerRule.UriString}?id={id}");
                 Assert.AreEqual(HttpStatusCode.OK, response.StatusCode);
+            }
+        }
+
+        private async Task TestLeakyBucket()
+        {
+            // Warm-up
+            await Client.GetAsync($"{LeakyBucketRule.UriString}?id={Guid.NewGuid()}");
+
+            Guid id = Guid.NewGuid();
+
+            for (int i = 0; i < 3; i++)
+            {
+                var tasks = Enumerable.Range(0, 6).Select(_ => {
+
+                    var sw = new Stopwatch();
+                    sw.Start();
+
+                    return Client
+                        .GetAsync($"{LeakyBucketRule.UriString}?id={id}")
+                        .ContinueWith(t => (t.Result.StatusCode, sw.ElapsedMilliseconds));
+                });
+
+                var results = await Task.WhenAll(tasks);
+
+                string msg = string.Join(
+                    " | ",
+                    results
+                        .OrderBy(r => r.ElapsedMilliseconds)
+                        .Select(r => $"{r.StatusCode}({r.ElapsedMilliseconds}ms)"));
+
+                Trace.WriteLine("Results: " + msg);
+
+                Assert.AreEqual(4, results.Count(r => r.StatusCode == HttpStatusCode.OK), msg);
+                Assert.AreEqual(2, results.Count(r => r.StatusCode == HttpStatusCode.TooManyRequests), msg);
+
+                var lats = results
+                    .Where(r => r.StatusCode == HttpStatusCode.OK)
+                    .OrderBy(r => r.ElapsedMilliseconds)
+                    .Select(r => r.ElapsedMilliseconds)
+                    .ToArray();
+
+                Assert.AreEqual(4, lats.Length);
+
+                Assert.IsTrue(lats[0] >=   0 && lats[0] <=  50, $"0: {lats[0]}ms");
+                Assert.IsTrue(lats[1] >= 190 && lats[1] <= 250, $"1: {lats[1]}ms");
+                Assert.IsTrue(lats[2] >= 390 && lats[2] <= 450, $"2: {lats[2]}ms");
+                Assert.IsTrue(lats[3] >= 590 && lats[3] <= 650, $"3: {lats[3]}ms");
+
+                await Task.Delay(300);
             }
         }
     }

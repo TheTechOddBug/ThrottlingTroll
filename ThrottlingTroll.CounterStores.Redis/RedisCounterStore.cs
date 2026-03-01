@@ -34,19 +34,49 @@ namespace ThrottlingTroll.CounterStores.Redis
         }
 
         /// <inheritdoc />
-        public async Task<long> IncrementAndGetAsync(string key, long cost, DateTimeOffset ttl, long maxCounterValueToSetTtl, IHttpRequestProxy request)
+        public async Task<long> IncrementAndGetAsync(string key, long cost, long ttlInTicks, CounterStoreIncrementAndGetOptions options, long maxCounterValueToSetTtl, IHttpRequestProxy request)
         {
             var db = this._redis.GetDatabase();
 
-            // Doing this with one atomic LUA script
-            // Need to also check if TTL was set at all (that's because some people reported that INCR might not be atomic)
-            var script = LuaScript.Prepare(
-                $"local c = redis.call('INCRBY', @key, @cost) if c <= tonumber(@maxCounterValueToSetTtl) or redis.call('PTTL', @key) < 0 then redis.call('PEXPIREAT', @key, @absTtlInMs) end return c"
-            );
+            RedisResult res;
+            if (options == CounterStoreIncrementAndGetOptions.IncrementTtl)
+            {
+                // Also reading the current TTL (if any) and incrementing it
+                var script = LuaScript.Prepare(
+                    $"local c = redis.call('INCRBY', @key, @cost) if c <= tonumber(@maxCounterValueToSetTtl) then local ttl = redis.call('PTTL', @key) if ttl < 0 then ttl = 0 end redis.call('PEXPIRE', @key, ttl + @incTtlInMs) end return c"
+                );
 
-            var val = await db.ScriptEvaluateAsync(script, new { key = (RedisKey)key, cost, absTtlInMs = ttl.ToUnixTimeMilliseconds(), maxCounterValueToSetTtl });
+                res = await db.ScriptEvaluateAsync(
+                    script,
+                    new
+                    {
+                        key = (RedisKey)key,
+                        cost,
+                        incTtlInMs = ttlInTicks / TimeSpan.TicksPerMillisecond,
+                        maxCounterValueToSetTtl
+                    });
+            }
+            else
+            {
+                // Need to also check if TTL was set at all (that's because some people reported that INCR might not be atomic)
+                var script = LuaScript.Prepare(
+                    $"local c = redis.call('INCRBY', @key, @cost) if c <= tonumber(@maxCounterValueToSetTtl) or redis.call('PTTL', @key) < 0 then redis.call('PEXPIREAT', @key, @absTtlInMs) end return c"
+                );
 
-            return (long)val;
+                var absTtl = new DateTimeOffset(ttlInTicks, TimeSpan.Zero);
+
+                res = await db.ScriptEvaluateAsync(
+                    script,
+                    new
+                    {
+                        key = (RedisKey)key,
+                        cost,
+                        absTtlInMs = absTtl.ToUnixTimeMilliseconds(),
+                        maxCounterValueToSetTtl
+                    });
+            }
+
+            return (long)res;
         }
 
         /// <inheritdoc />

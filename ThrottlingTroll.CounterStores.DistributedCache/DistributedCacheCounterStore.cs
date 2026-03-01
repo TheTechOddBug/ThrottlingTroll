@@ -66,20 +66,24 @@ namespace ThrottlingTroll.CounterStores.DistributedCache
         }
 
         /// <inheritdoc />
-        public async Task<long> IncrementAndGetAsync(string key, long cost, DateTimeOffset ttl, long maxCounterValueToSetTtl, IHttpRequestProxy request)
+        public async Task<long> IncrementAndGetAsync(string key, long cost, long ttlInTicks, CounterStoreIncrementAndGetOptions options, long maxCounterValueToSetTtl, IHttpRequestProxy request)
         {
             // This is just a local lock, but it's the best we can do with IDistributedCache
             await this._asyncLock.WaitAsync();
 
             try
             {
-                CacheEntry cacheEntry;
-
                 var bytes = await this._cache.GetAsync(key);
+
+                CacheEntry cacheEntry;
 
                 if (bytes == null)
                 {
-                    cacheEntry = new CacheEntry(0, ttl);
+                    cacheEntry = new CacheEntry(
+                        0,
+                        options == CounterStoreIncrementAndGetOptions.IncrementTtl ?
+                            DateTimeOffset.UtcNow + TimeSpan.FromTicks(ttlInTicks) :
+                            new DateTimeOffset(ttlInTicks, TimeSpan.Zero));
                 }
                 else
                 {
@@ -90,7 +94,9 @@ namespace ThrottlingTroll.CounterStores.DistributedCache
 
                 if (cacheEntry.Count <= maxCounterValueToSetTtl)
                 {
-                    cacheEntry.ExpiresAt = ttl;
+                    cacheEntry.ExpiresAt = options == CounterStoreIncrementAndGetOptions.IncrementTtl ?
+                        cacheEntry.ExpiresAt + TimeSpan.FromTicks(ttlInTicks) :
+                        new DateTimeOffset(ttlInTicks, TimeSpan.Zero);
                 }
 
                 await this.SetAsync(key, cacheEntry);

@@ -1,4 +1,5 @@
 ﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Linq;
@@ -58,9 +59,11 @@ namespace ThrottlingTroll.CounterStores.EfCore
         }
 
         /// <inheritdoc />
-        public async Task<long> IncrementAndGetAsync(string key, long cost, DateTimeOffset ttl, long maxCounterValueToSetTtl, IHttpRequestProxy request)
+        public async Task<long> IncrementAndGetAsync(string key, long cost, long ttlInTicks, CounterStoreIncrementAndGetOptions options, long maxCounterValueToSetTtl, IHttpRequestProxy request)
         {
             this.RunCleanupIfNeeded();
+
+            var ttl = new DateTimeOffset(ttlInTicks, TimeSpan.Zero);
 
             var retryCount = this._settings.MaxAttempts - 2;
             while (true)
@@ -91,7 +94,9 @@ namespace ThrottlingTroll.CounterStores.EfCore
                         {
                             Id = key,
                             Count = cost,
-                            ExpiresAt = ttl
+                            ExpiresAt = options == CounterStoreIncrementAndGetOptions.IncrementTtl ?
+                                DateTimeOffset.UtcNow + TimeSpan.FromTicks(ttlInTicks) :
+                                new DateTimeOffset(ttlInTicks, TimeSpan.Zero)
                         });
 
                         await db.SaveChangesAsync();
@@ -112,7 +117,10 @@ namespace ThrottlingTroll.CounterStores.EfCore
                     // Also updating TTL, if needed
                     if (counter.Count <= maxCounterValueToSetTtl)
                     {
-                        counter.ExpiresAt = ttl;
+                        counter.ExpiresAt = options == CounterStoreIncrementAndGetOptions.IncrementTtl ?
+                            counter.ExpiresAt + TimeSpan.FromTicks(ttlInTicks) :
+                            new DateTimeOffset(ttlInTicks, TimeSpan.Zero);
+
                         await db.SaveChangesAsync();
                     }
 
